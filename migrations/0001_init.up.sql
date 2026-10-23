@@ -141,18 +141,18 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     RAISE EXCEPTION 'wallet_ledger_entries is append-only: % is not allowed', TG_OP
-        USING HINT = 'Corrija lançamentos inserindo uma nova entrada compensatória.';
+        USING HINT = 'To correct an entry, insert a new compensating entry.';
     RETURN NULL;
 END;
 $$;
 
--- Nível de statement: dispara mesmo quando nenhuma linha seria afetada.
+-- Statement-level trigger: fires even when no rows would be affected.
 CREATE TRIGGER trg_wallet_ledger_entries_immutable_stmt
     BEFORE UPDATE OR DELETE OR TRUNCATE ON wallet_ledger_entries
     FOR EACH STATEMENT
     EXECUTE FUNCTION fn_ledger_immutable();
 
--- Nível de linha: cobre qualquer caminho que escape do statement-level.
+-- Row-level trigger: covers any path that bypasses the statement-level trigger.
 CREATE TRIGGER trg_wallet_ledger_entries_immutable_row
     BEFORE UPDATE OR DELETE ON wallet_ledger_entries
     FOR EACH ROW

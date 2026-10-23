@@ -4,7 +4,6 @@ package usecase_test
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/PabloRogerioSO/backend-challenge-go/internal/app/usecase"
@@ -331,7 +330,7 @@ func TestProcessWager_RollbackOfWinNeedsFunds(t *testing.T) {
 	w := openWallet(t, 1000)
 	win := newInput(t, w.ID(), wagering.KindWin, 5000)
 	mustProcess(t, win)
-	mustProcess(t, newInput(t, w.ID(), wagering.KindBet, 5500)) // balance 500
+	mustProcess(t, newInput(t, w.ID(), wagering.KindBet, 5500))
 
 	rollback := newInput(t, w.ID(), wagering.KindRollback, 5000)
 	rollback.ReferenceExternalTransactionID = win.ExternalTransactionID
@@ -352,8 +351,5 @@ func TestProcessWager_RollbackOfWinNeedsFunds(t *testing.T) {
 	retry.ReferenceExternalTransactionID = win.ExternalTransactionID
 	if out := mustProcess(t, retry); out.Status != wagering.StatusProcessed || out.Balance.Cents() != 500 {
 		t.Fatalf("rollback with funds output = %+v", out)
-	}
-	if !strings.HasPrefix(retry.IdempotencyKey, "idem-") {
-		t.Fatal("sanity check on helper keys failed")
 	}
 }

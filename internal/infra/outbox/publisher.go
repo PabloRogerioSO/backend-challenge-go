@@ -107,7 +107,7 @@ func (p *Publisher) Tick(ctx context.Context) (int, error) {
 		claimed = len(events)
 		for _, ev := range events {
 			if sendErr := p.send(ctx, ev); sendErr != nil {
-				metrics.OutboxPublishErrorsTotal.Inc() // <-- Prometheus metric for publish errors
+				metrics.OutboxPublishErrorsTotal.Inc()
 				next := p.now().Add(Backoff(ev.Attempts, p.cfg.BaseBackoff, p.cfg.MaxBackoff))
 				p.log.Warn("outbox publish failed; scheduling retry", "eventId", ev.EventID, "next", next, "err", sendErr)
 				if err := p.store.MarkRetry(ctx, tx, ev.ID, next, truncate(sendErr.Error(), 500)); err != nil {

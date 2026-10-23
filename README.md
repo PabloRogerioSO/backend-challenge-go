@@ -4,7 +4,7 @@ This project implements a financial processing service for wagering, built to wi
 
 ## 🛠️ Prerequisites
 
-- **Go** (version 1.24 or higher)
+- **Go** (version 1.26 or higher)
 - **Docker** and **Docker Compose** (Docker Desktop on Windows/Mac)
 - **Git Bash** (recommended for Windows users, as the shell commands are bash-based)
 
@@ -45,7 +45,7 @@ MSYS_NO_PATHCONV=1 docker run --rm --network backend-challenge-go_default -v "$(
 
 ## 🔐 Authentication (Keycloak)
 
-The API is protected via OAuth 2.0/OIDC. The local Keycloak is provisioned with two test providers (`provider-a` and `provider-b`).
+The API is protected via OAuth 2.0/OIDC. The local Keycloak is provisioned with two test providers (`provider-a` and `provider-b`) and an internal admin client.
 
 To obtain an access token, use the helper script:
 
@@ -88,19 +88,34 @@ go test -race ./...
 ```bash
 go test -tags=integration ./...
 ```
+> **Windows note:** if `go test -tags=integration ./...` panics with `rootless Docker is not supported on Windows`, run the tests with the Docker named pipe explicitly and serialize packages:
+> ```bash
+> export DOCKER_HOST=npipe:////./pipe/docker_engine
+> go test -tags=integration -count=1 -p 1 ./...
+> ```
+> On Linux and macOS, no override is needed.
 
 ### Vet and Format
 ```bash
 go vet ./...
 ```
 
-### End-to-End Test (Multi-Instance)
-This test spins up 3 instances behind an Nginx load balancer, applies migrations, and simulates concurrent HTTP and SQS traffic to validate concurrency and idempotency.
+### End-to-End Test (Multi-Instance + Advanced Scenarios)
+This test spins up 3 instances behind an Nginx load balancer and covers:
+- HTTP + SQS sending the **same operation** (idempotency across transports).
+- Poison message routing to DLQ.
+- Consumer crash with **real SQS redelivery**.
 
 ```bash
 # Ensure Docker is running
 chmod +x tests/e2e/e2e.sh
 ./tests/e2e/e2e.sh
+```
+
+Expected output ends with:
+```
+=== E2E ADVANCED TEST PASSED SUCCESSFULLY ===
+```
 
 ## 📦 Provisioning SQS Queues
 

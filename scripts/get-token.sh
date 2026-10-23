@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Script to obtain a JWT access token from Keycloak using the OAuth 2.0 client_credentials flow.
-# Usage: ./scripts/get-token.sh <provider-a|provider-b>
+# Usage: ./scripts/get-token.sh <provider-a|provider-b|internal-admin>
 
 set -euo pipefail
 
 CLIENT_ID="${1:-}"
-if [[ "$CLIENT_ID" != "provider-a" && "$CLIENT_ID" != "provider-b" ]]; then
-  echo "Usage: $0 <provider-a|provider-b>" >&2
+if [[ "$CLIENT_ID" != "provider-a" && "$CLIENT_ID" != "provider-b" && "$CLIENT_ID" != "internal-admin" ]]; then
+  echo "Usage: $0 <provider-a|provider-b|internal-admin>" >&2
   exit 1
 fi
 

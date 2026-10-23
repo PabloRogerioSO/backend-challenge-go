@@ -26,7 +26,7 @@
     },
     {
       "name": "wager.write",
-      "description": "Permite registrar apostas e transações de wager",
+      "description": "Allows registering wagers and wager transactions",
       "protocol": "openid-connect",
       "attributes": {
         "include.in.token.scope": "true",
@@ -35,7 +35,7 @@
     },
     {
       "name": "internal.wallet",
-      "description": "Reservado para operações internas de wallet; não atribuído a providers",
+      "description": "Reserved for internal wallet operations",
       "protocol": "openid-connect",
       "attributes": {
         "include.in.token.scope": "true",
@@ -47,7 +47,7 @@
     {
       "clientId": "provider-service",
       "name": "Provider Service (API)",
-      "description": "Resource server: audiência dos tokens emitidos para providers",
+      "description": "Resource server: audience for tokens issued to providers",
       "enabled": true,
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
@@ -72,7 +72,7 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
       "protocol": "openid-connect",
-      "defaultClientScopes": ["basic", "wager.write", "internal.wallet"],
+      "defaultClientScopes": ["basic", "wager.write"],
       "optionalClientScopes": [],
       "protocolMappers": [
         {
@@ -114,7 +114,7 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
       "protocol": "openid-connect",
-      "defaultClientScopes": ["basic", "wager.write", "internal.wallet"],
+      "defaultClientScopes": ["basic", "wager.write"],
       "optionalClientScopes": [],
       "protocolMappers": [
         {
@@ -125,6 +125,48 @@
           "config": {
             "claim.name": "provider_id",
             "claim.value": "provider-b",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "audience-provider-service",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "provider-service",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "internal-admin",
+      "name": "Internal Admin (E2E Tests)",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "internal-admin-secret",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocol": "openid-connect",
+      "defaultClientScopes": ["basic", "internal.wallet"],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "provider_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "provider_id",
+            "claim.value": "internal",
             "jsonType.label": "String",
             "access.token.claim": "true",
             "id.token.claim": "false",

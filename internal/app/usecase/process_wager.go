@@ -16,7 +16,6 @@ import (
 	"github.com/PabloRogerioSO/backend-challenge-go/internal/infra/postgres"
 )
 
-// Failure codes stored in wager_transactions.failure_code for rejected transactions.
 const (
 	FailureInsufficientFunds         = "INSUFFICIENT_FUNDS"
 	FailureInsufficientFundsRollback = "INSUFFICIENT_FUNDS_ROLLBACK"
@@ -168,6 +167,17 @@ func (p *WagerProcessor) processOnceTx(ctx context.Context, tx pgx.Tx, in Proces
 		existing, err := p.wagers.GetByIdempotencyKey(ctx, tx, in.IdempotencyKey)
 		switch {
 		case err == nil:
+			// A transaction parked waiting for a reference must be retried,
+			// not replayed, when the caller confirms the reference now exists.
+			// This is the recovery path used by the refworker.
+			if existing.Status == wagering.StatusPendingReference {
+				resolved, retryErr := p.retryPending(ctx, tx, w, existing, hash)
+				if retryErr != nil {
+					return retryErr
+				}
+				out = resolved
+				return nil
+			}
 			replay, replayErr := replayOutput(existing, hash)
 			if replayErr != nil {
 				return replayErr
@@ -195,6 +205,73 @@ func (p *WagerProcessor) processOnceTx(ctx context.Context, tx pgx.Tx, in Proces
 		return nil
 	}()
 	return out, err
+}
+
+// retryPending re-evaluates a PENDING_REFERENCE transaction. If the reference
+// still does not exist, the transaction is left parked (and the persisted
+// result is replayed). If the reference now exists, the reversal is applied
+// and the transaction moves to PROCESSED or REJECTED.
+func (p *WagerProcessor) retryPending(ctx context.Context, tx pgx.Tx, w *wallet.Wallet, t *wagering.WagerTransaction, hash string) (ProcessWagerOutput, error) {
+	if t.RequestHash != hash {
+		return ProcessWagerOutput{}, fmt.Errorf("%w: key %s", ErrIdempotencyConflict, t.IdempotencyKey)
+	}
+
+	// Peek at the reference before delegating to decide/reverse.
+	_, err := p.wagers.GetByProviderAndExternal(ctx, tx, t.ProviderID, t.ReferenceExternalTransactionID)
+	if errors.Is(err, postgres.ErrNotFound) {
+		balance := w.Balance()
+		t.ResultBalance = &balance
+		return ProcessWagerOutput{
+			WalletID:      t.WalletID,
+			TransactionID: t.ID,
+			Kind:          t.Kind,
+			Status:        wagering.StatusPendingReference,
+			Balance:       balance,
+			Replayed:      true,
+		}, nil
+	}
+	if err != nil {
+		return ProcessWagerOutput{}, err
+	}
+
+	at := p.now()
+	entry, err := p.decide(ctx, tx, w, t)
+	if err != nil {
+		return ProcessWagerOutput{}, err
+	}
+
+	if err := p.wagers.Update(ctx, tx, t); err != nil {
+		return ProcessWagerOutput{}, err
+	}
+	if entry != nil {
+		if err := p.ledgers.Create(ctx, tx, entry); err != nil {
+			return ProcessWagerOutput{}, err
+		}
+		if err := p.wallets.UpdateBalance(ctx, tx, w); err != nil {
+			return ProcessWagerOutput{}, err
+		}
+	}
+	if err := emitTransactionEvent(ctx, p.outbox, tx, t, at); err != nil {
+		return ProcessWagerOutput{}, err
+	}
+	if entry != nil {
+		if err := emitBalanceChanged(ctx, p.outbox, tx, *entry, at); err != nil {
+			return ProcessWagerOutput{}, err
+		}
+	}
+
+	if t.ResultBalance == nil {
+		return ProcessWagerOutput{}, fmt.Errorf("%w: transaction %s finished without result balance", ErrInconsistentState, t.ID)
+	}
+	return ProcessWagerOutput{
+		WalletID:      t.WalletID,
+		TransactionID: t.ID,
+		Kind:          t.Kind,
+		Status:        t.Status,
+		FailureCode:   t.FailureCode,
+		Balance:       *t.ResultBalance,
+		Replayed:      false,
+	}, nil
 }
 
 func replayOutput(t *wagering.WagerTransaction, hash string) (ProcessWagerOutput, error) {

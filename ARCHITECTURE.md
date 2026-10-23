@@ -29,7 +29,7 @@ This document outlines the architectural decisions and trade-offs made while bui
 
 ## Pending References
 - If a `REFUND` or `ROLLBACK` arrives before its referenced transaction, it is persisted with the status `PENDING_REFERENCE`.
-- The `refworker` runs asynchronously, looking for `PENDING_REFERENCE` rows. It checks if the reference has been processed and, if so, executes the reversal.
+- The `refworker` runs asynchronously, looking for `PENDING_REFERENCE` rows. It checks if the reference has been processed and, if so, executes the reversal. If the reference now exists, the worker triggers `ProcessWagerTx`, which detects the `PENDING_REFERENCE` state, applies the credit/debit, and transitions to `PROCESSED`.
 - If a configurable TTL (e.g., 24 hours) expires, the transaction is marked as `REJECTED` with the code `REFERENCE_NOT_FOUND`.
 
 ## Inbox/Outbox Pattern
@@ -38,17 +38,20 @@ This document outlines the architectural decisions and trade-offs made while bui
 - **Event ID Stability:** The `EventID` is generated at the time of the domain event, ensuring that retries do not create duplicate events in the message broker.
 
 ## Authentication and Authorization
-- **OIDC/Keycloak:** The API validates JWTs using the JWKS endpoint from Keycloak.
+- **OIDC/Keycloak:** The API validates JWTs using the JWKS endpoint from Keycloak. The validator caches keys and refreshes on unknown `kid`.
 - **Provider Isolation:** The `provider_id` claim is extracted from the token. The API strictly uses this value and ignores any `providerId` sent in the request body. 
-- **Scopes:** External providers must have the `wager.write` scope. Internal routes (like creating wallets) require the `internal.wallet` scope.
+- **Scopes:** External providers must have the `wager.write` scope. Internal routes (like creating wallets) require the `internal.wallet` scope, which is only granted to the `internal-admin` client.
 
 ## Observability
 - **Structured Logging:** We use `log/slog` to emit JSON logs, capturing `correlationId`, `messageId`, `transactionId`, `walletId`, and `providerId` for distributed tracing.
 - **Metrics:** Prometheus metrics are exposed at `/metrics` to track HTTP latencies, SQS duplicates (Inbox), outbox publish errors, DLQ arrivals, concurrency conflicts, and reconciliation divergences.
 
+## Advanced E2E Validation
+The `tests/e2e/e2e.sh` script validates three critical scenarios beyond the basic multi-instance test:
+- **Cross-transport idempotency**: A BET is sent through HTTP and then through SQS with the same `idempotency_key`. Only one debit is recorded.
+- **Poison message handling**: Malformed JSON is dropped by the consumer, the queue drains, and the app stays ready.
+- **Crash recovery**: All app instances are killed after receiving a message but before deleting it from SQS. After the visibility timeout expires and new instances are up, the message is redelivered and applied exactly once (verified via balance and debit count in Postgres).
+
 ## Fx and Lifecycle
 - **Composition:** We use Uber Fx (`go.uber.org/fx`) to wire dependencies, group them into modules, and manage the application lifecycle.
 - **Graceful Shutdown:** The HTTP server, SQS consumer, outbox publisher, and reference worker are all started via `fx.Lifecycle`. On `SIGTERM`, the application stops accepting new HTTP requests and stops polling for new messages. In-flight work is allowed to finish before the database pool is closed.
-
-## Multi-Instance Testing
-- A dedicated E2E shell script (`tests/e2e/e2e.sh`) spins up 3 independent application instances, sends concurrent HTTP and SQS requests, and verifies that the database state remains strictly consistent without duplicate ledger entries.

@@ -26,6 +26,18 @@ func (f *fakeAPI) DeleteMessage(_ context.Context, in *awssqs.DeleteMessageInput
 	return &awssqs.DeleteMessageOutput{}, nil
 }
 
+type crashingDeleteAPI struct {
+	fakeAPI *fakeAPI
+}
+
+func (c *crashingDeleteAPI) ReceiveMessage(ctx context.Context, in *awssqs.ReceiveMessageInput, opts ...func(*awssqs.Options)) (*awssqs.ReceiveMessageOutput, error) {
+	return c.fakeAPI.ReceiveMessage(ctx, in, opts...)
+}
+
+func (c *crashingDeleteAPI) DeleteMessage(ctx context.Context, in *awssqs.DeleteMessageInput, opts ...func(*awssqs.Options)) (*awssqs.DeleteMessageOutput, error) {
+	return nil, errors.New("simulated crash before delete")
+}
+
 type fakeInbox struct {
 	inserted bool
 	err      error
@@ -41,7 +53,6 @@ type fakeProc struct {
 	gotTx pgx.Tx
 }
 
-// ProcessWagerTx now implements the updated Processor interface.
 func (f *fakeProc) ProcessWagerTx(_ context.Context, tx pgx.Tx, _ usecase.ProcessWagerInput) (usecase.ProcessWagerOutput, error) {
 	f.calls++
 	f.gotTx = tx
@@ -50,7 +61,6 @@ func (f *fakeProc) ProcessWagerTx(_ context.Context, tx pgx.Tx, _ usecase.Proces
 
 type fakeTxToken struct{ pgx.Tx }
 
-// fakeTx mimics WithTx: fn error => rollback (error returned), nil => commit.
 func fakeTx(committed *int) func(context.Context, func(pgx.Tx) error) error {
 	return func(_ context.Context, fn func(pgx.Tx) error) error {
 		if err := fn(&fakeTxToken{}); err != nil {
@@ -71,7 +81,7 @@ func msg(handle, group, id string) types.Message {
 	}
 }
 
-func newTestConsumer(api *fakeAPI, inbox *fakeInbox, proc *fakeProc, commits *int) *Consumer {
+func newTestConsumer(api API, inbox Inbox, proc Processor, commits *int) *Consumer {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return NewConsumer(Config{QueueURL: "q"}, api, fakeTx(commits), inbox, proc, log)
 }
@@ -108,7 +118,24 @@ func TestConsumer_TransientErrorDoesNotCommitNorDelete(t *testing.T) {
 	c.handleBatch(context.Background(), []types.Message{msg("h1", "w1", "m1")})
 
 	if commits != 0 || len(api.deleted) != 0 {
-		t.Fatalf("commits=%d deleted=%v", commits, api.deleted)
+		t.Fatalf("commits=%d deleted=%v, want 0 and []", commits, api.deleted)
+	}
+}
+
+// Simulates the scenario where the process crashes after the database commit
+// but before calling DeleteMessage on SQS. The message must not be deleted so SQS redelivers it.
+func TestConsumer_CrashAfterCommitBeforeDelete(t *testing.T) {
+	api, proc, commits := &fakeAPI{}, &fakeProc{}, 0
+	crashAPI := &crashingDeleteAPI{fakeAPI: api}
+	c := newTestConsumer(crashAPI, &fakeInbox{inserted: true}, proc, &commits)
+
+	c.handleBatch(context.Background(), []types.Message{msg("h1", "w1", "m1")})
+
+	if commits != 1 {
+		t.Fatalf("expected 1 commit, got %d", commits)
+	}
+	if len(api.deleted) != 0 {
+		t.Fatalf("expected no deleted messages, got %v", api.deleted)
 	}
 }
 
@@ -120,7 +147,6 @@ func TestConsumer_FailedGroupSkipsRestOfGroupOnly(t *testing.T) {
 		msg("h1", "w1", "m1"), msg("h2", "w1", "m2"), msg("h3", "w2", "m3"),
 	})
 
-	// m1 fails -> m2 (same group) skipped; m3 (other group) still attempted.
 	if proc.calls != 2 {
 		t.Fatalf("expected 2 attempts, got %d", proc.calls)
 	}

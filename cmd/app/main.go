@@ -176,10 +176,14 @@ func startWorkers(
 }
 
 func main() {
-	// Initialize Prometheus metrics registry.
 	metrics.Register()
+	buildApp().Run()
+}
 
-	app := fx.New(
+// buildApp constructs the fx.App graph. It is separated from main so an
+// integration test can exercise Start/Stop without blocking on Run.
+func buildApp() *fx.App {
+	return fx.New(
 		fx.StopTimeout(45*time.Second),
 		fx.Provide(
 			config.Load,
@@ -188,15 +192,13 @@ func main() {
 			newPool,
 			newHTTPDatabase,
 			newUsecaseDB,
-			newPostgresDB, // <-- Added the missing interface binding
+			newPostgresDB,
 			newSQSClient,
 
-			// Auth
 			func(cfg *config.Config) (*auth.Validator, error) {
 				return auth.NewValidator(cfg.KeycloakIssuerURL, cfg.KeycloakJWKSURL, cfg.KeycloakAudience)
 			},
 
-			// Repositories
 			postgres.NewWalletRepo,
 			postgres.NewWageringRepo,
 			postgres.NewLedgerRepo,
@@ -205,17 +207,14 @@ func main() {
 			postgres.NewPendingRepo,
 			func(pool *pgxpool.Pool) postgres.TxRunner { return postgres.NewTxRunner(pool) },
 
-			// Use Cases
 			usecase.NewWalletOpener,
 			usecase.NewWagerProcessor,
 			usecase.NewReconciler,
 
-			// HTTP Server
 			apphttp.NewServer,
 		),
 		fx.Invoke(startHTTP, startWorkers),
 	)
-	app.Run()
 }
 
 func envStr(key, def string) string {

@@ -6,15 +6,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// DB is the database handle required by PendingRepo; *pgxpool.Pool implements it.
 type DB interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
+// PendingTransaction is a wager transaction waiting for its reference.
 type PendingTransaction struct {
 	ID                             string
 	CreatedAt                      time.Time
@@ -30,10 +30,13 @@ type PendingTransaction struct {
 	ReferenceExternalTransactionID string
 }
 
+// PendingRepo persists pending-reference lookups and status transitions.
 type PendingRepo struct{ db DB }
 
+// NewPendingRepo builds a repository bound to the given database handle.
 func NewPendingRepo(db DB) *PendingRepo { return &PendingRepo{db: db} }
 
+// ListPending returns the oldest PENDING_REFERENCE transactions, up to limit.
 func (r *PendingRepo) ListPending(ctx context.Context, limit int) ([]PendingTransaction, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, provider_id, wallet_id, idempotency_key, external_transaction_id, kind,
@@ -60,6 +63,7 @@ func (r *PendingRepo) ListPending(ctx context.Context, limit int) ([]PendingTran
 	return out, rows.Err()
 }
 
+// ReferenceProcessed reports whether the referenced transaction exists and is PROCESSED.
 func (r *PendingRepo) ReferenceProcessed(ctx context.Context, providerID, referenceExternalTransactionID string) (bool, error) {
 	var ok bool
 	err := r.db.QueryRow(ctx, `
@@ -73,6 +77,7 @@ func (r *PendingRepo) ReferenceProcessed(ctx context.Context, providerID, refere
 	return ok, nil
 }
 
+// MarkProcessed moves the row to PROCESSED inside tx. Returns false if it already left PENDING_REFERENCE.
 func (r *PendingRepo) MarkProcessed(ctx context.Context, tx pgx.Tx, id string) (bool, error) {
 	tag, err := tx.Exec(ctx, `
 		UPDATE wager_transactions SET status = 'PROCESSED', updated_at = now()
@@ -83,6 +88,7 @@ func (r *PendingRepo) MarkProcessed(ctx context.Context, tx pgx.Tx, id string) (
 	return tag.RowsAffected() == 1, nil
 }
 
+// MarkRejected moves the row to REJECTED inside tx. Returns false if it already left PENDING_REFERENCE.
 func (r *PendingRepo) MarkRejected(ctx context.Context, tx pgx.Tx, id, failureCode string) (bool, error) {
 	tag, err := tx.Exec(ctx, `
 		UPDATE wager_transactions SET status = 'REJECTED', failure_code = $2, updated_at = now()

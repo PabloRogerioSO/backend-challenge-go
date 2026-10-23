@@ -123,7 +123,7 @@ func newRouter(d deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(accessLog(d.logger))
-	r.Use(metricsMiddleware) // Prometheus Metrics
+	r.Use(metricsMiddleware)
 	r.Use(middleware.Recoverer)
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {

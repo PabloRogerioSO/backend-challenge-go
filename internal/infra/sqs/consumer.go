@@ -119,11 +119,11 @@ func (c *Consumer) handleBatch(ctx context.Context, msgs []types.Message) {
 	failedGroups := make(map[string]struct{})
 	for _, msg := range msgs {
 		if ctx.Err() != nil {
-			return // stop starting new work; unfinished messages return after visibility timeout
+			return // Stop starting new work; unfinished messages return after visibility timeout.
 		}
 		group := msg.Attributes[string(types.MessageSystemAttributeNameMessageGroupId)]
 		if _, failed := failedGroups[group]; failed {
-			continue // preserve FIFO order inside the group
+			continue // Preserve FIFO order inside the group.
 		}
 		// In-flight work is detached from shutdown cancellation but bounded by a timeout.
 		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.cfg.ProcessTimeout)
@@ -151,24 +151,23 @@ func (c *Consumer) handle(ctx context.Context, msg types.Message) error {
 
 	hash := PayloadHash(body)
 	err = c.tx(ctx, func(tx pgx.Tx) error {
-		// Inbox insert and business processing share THIS transaction: both commit or neither does.
+		// Inbox insert and business processing share this transaction.
 		inserted, err := c.inbox.TryInsert(ctx, tx, c.cfg.ConsumerName, env.MessageID, hash)
 		if err != nil {
 			return fmt.Errorf("inbox: %w", err)
 		}
 		if !inserted {
 			c.log.Info("duplicate message ignored", "messageId", env.MessageID)
-			metrics.SQSDuplicatesTotal.Inc() // <-- Prometheus metric for duplicates
+			metrics.SQSDuplicatesTotal.Inc()
 			return nil
 		}
-		// Any error here is infrastructure (REJECTED is a business output, not an error).
 		if _, err := c.proc.ProcessWagerTx(ctx, tx, env.Data); err != nil {
 			return fmt.Errorf("process wager: %w", err)
 		}
 		return nil
 	})
 	if err != nil {
-		return err // rolled back, not deleted: SQS visibility timeout retries
+		return err // Rolled back, not deleted: SQS visibility timeout retries.
 	}
 	return c.delete(ctx, msg)
 }
