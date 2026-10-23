@@ -1,0 +1,23 @@
+# Binários
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+
+# Ambiente
+.env
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# SO
+.DS_Store
+Thumbs.db
