@@ -6,10 +6,12 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/PabloRogerioSO/backend-challenge-go/internal/app/usecase"
 	"github.com/PabloRogerioSO/backend-challenge-go/internal/config"
@@ -18,6 +20,7 @@ import (
 	"github.com/PabloRogerioSO/backend-challenge-go/internal/domain/wagering"
 	"github.com/PabloRogerioSO/backend-challenge-go/internal/domain/wallet"
 	"github.com/PabloRogerioSO/backend-challenge-go/internal/infra/auth"
+	"github.com/PabloRogerioSO/backend-challenge-go/internal/infra/metrics"
 	"github.com/PabloRogerioSO/backend-challenge-go/internal/infra/postgres"
 )
 
@@ -79,7 +82,7 @@ type deps struct {
 }
 
 // NewServer builds the HTTP server with all routes. Everything but the health
-// endpoints requires a valid token.
+// endpoints and metrics requires a valid token.
 func NewServer(
 	cfg *config.Config,
 	authValidator *auth.Validator,
@@ -120,6 +123,7 @@ func newRouter(d deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(accessLog(d.logger))
+	r.Use(metricsMiddleware) // Prometheus Metrics
 	r.Use(middleware.Recoverer)
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
@@ -129,9 +133,12 @@ func newRouter(d deps) http.Handler {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	})
 
+	// Public routes
 	r.Get("/health/live", h.live)
 	r.Get("/health/ready", h.ready)
+	r.Get("/metrics", promhttp.Handler().ServeHTTP)
 
+	// Protected routes
 	r.Group(func(r chi.Router) {
 		r.Use(d.authenticate)
 
@@ -168,4 +175,28 @@ func accessLog(logger *slog.Logger) func(http.Handler) http.Handler {
 			)
 		})
 	}
+}
+
+// metricsMiddleware records the HTTP request count and duration for Prometheus.
+func metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(ww, r)
+
+		duration := time.Since(start).Seconds()
+		status := strconv.Itoa(ww.Status())
+		if ww.Status() == 0 {
+			status = "200"
+		}
+
+		// Get the route pattern (e.g., /wallets/{walletId}) to avoid high cardinality
+		path := chi.RouteContext(r.Context()).RoutePattern()
+		if path == "" {
+			path = "unknown"
+		}
+
+		metrics.HTTPRequestsTotal.WithLabelValues(r.Method, path, status).Inc()
+		metrics.HTTPRequestDuration.WithLabelValues(r.Method, path).Observe(duration)
+	})
 }

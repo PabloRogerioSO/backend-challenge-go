@@ -29,8 +29,6 @@ const (
 	FailureAlreadyReversed           = "ALREADY_REVERSED"
 )
 
-// ProcessWagerInput is a provider request. ProviderID comes from the
-// authenticated identity; WalletID is the wallet that is locked and changed.
 type ProcessWagerInput struct {
 	ProviderID                     string
 	WalletID                       string
@@ -43,9 +41,6 @@ type ProcessWagerInput struct {
 	ReferenceExternalTransactionID string
 }
 
-// ProcessWagerOutput is the persisted outcome of a request. Balance is the
-// wallet balance when the request was processed (result_balance_cents), so a
-// replay returns exactly what the first response returned.
 type ProcessWagerOutput struct {
 	WalletID      string
 	TransactionID string
@@ -56,7 +51,6 @@ type ProcessWagerOutput struct {
 	Replayed      bool
 }
 
-// WagerProcessor applies provider transactions to wallets.
 type WagerProcessor struct {
 	db      DB
 	wallets *postgres.WalletRepo
@@ -66,7 +60,6 @@ type WagerProcessor struct {
 	now     func() time.Time
 }
 
-// NewWagerProcessor builds the use case.
 func NewWagerProcessor(db DB, wallets *postgres.WalletRepo, wagers *postgres.WageringRepo, ledgers *postgres.LedgerRepo, outbox *postgres.OutboxRepo) *WagerProcessor {
 	return &WagerProcessor{
 		db:      db,
@@ -89,13 +82,21 @@ type wagerRequest struct {
 	ReferenceExternalTransactionID string      `json:"reference_external_transaction_id"`
 }
 
-// ProcessWager processes a BET, WIN, LOSS, REFUND or ROLLBACK atomically.
-//
-// The transaction starts by locking the wallet row (SELECT ... FOR UPDATE);
-// only then is the idempotency key looked up, so concurrent duplicates are
-// serialized by the lock. The same key with the same payload replays the
-// persisted result; the same key with another payload is ErrIdempotencyConflict.
+// ProcessWager opens its own transaction (used by HTTP handlers).
 func (p *WagerProcessor) ProcessWager(ctx context.Context, in ProcessWagerInput) (ProcessWagerOutput, error) {
+	var out ProcessWagerOutput
+	err := postgres.WithTx(ctx, p.db, func(tx pgx.Tx) error {
+		var err error
+		out, err = p.ProcessWagerTx(ctx, tx, in)
+		return err
+	})
+	return out, err
+}
+
+// ProcessWagerTx runs the full use-case logic inside a caller-owned transaction.
+// It must NOT begin, commit or roll back: the caller (HTTP wrapper or SQS consumer,
+// which shares it with the inbox insert) controls the transaction boundary.
+func (p *WagerProcessor) ProcessWagerTx(ctx context.Context, tx pgx.Tx, in ProcessWagerInput) (ProcessWagerOutput, error) {
 	if err := validateInput(in); err != nil {
 		return ProcessWagerOutput{}, err
 	}
@@ -114,13 +115,10 @@ func (p *WagerProcessor) ProcessWager(ctx context.Context, in ProcessWagerInput)
 	}
 
 	for attempt := 1; ; attempt++ {
-		out, err := p.processOnce(ctx, in, hash)
+		out, err := p.processOnceTx(ctx, tx, in, hash)
 		if err == nil {
 			return out, nil
 		}
-		// Requests for different wallets are not serialized by the wallet lock, so
-		// two of them may race on the same key. The loser retries once and then
-		// finds the committed row (replay or conflict).
 		racing := postgres.IsUniqueViolation(err, postgres.ConstraintWagerIdempotencyKey) ||
 			postgres.IsUniqueViolation(err, postgres.ConstraintWagerProviderExternal)
 		if !racing || attempt >= 2 {
@@ -136,7 +134,6 @@ func validateInput(in ProcessWagerInput) error {
 	if in.ReferenceExternalTransactionID != "" && in.ReferenceExternalTransactionID == in.ExternalTransactionID {
 		return fmt.Errorf("%w: a transaction cannot reference itself", ErrInvalidInput)
 	}
-	// Reuse the domain rules (kind, amount, required identity fields, lengths).
 	_, err := wagering.NewExternal(wagering.NewExternalParams{
 		ID:                             "probe",
 		WalletID:                       in.WalletID,
@@ -157,10 +154,9 @@ func validateInput(in ProcessWagerInput) error {
 	return nil
 }
 
-func (p *WagerProcessor) processOnce(ctx context.Context, in ProcessWagerInput, hash string) (ProcessWagerOutput, error) {
+func (p *WagerProcessor) processOnceTx(ctx context.Context, tx pgx.Tx, in ProcessWagerInput, hash string) (ProcessWagerOutput, error) {
 	var out ProcessWagerOutput
-	err := postgres.WithTx(ctx, p.db, func(tx pgx.Tx) error {
-		// 1. Pessimistic lock: always the first statement of the transaction.
+	err := func() error {
 		w, err := p.wallets.GetByIDForUpdate(ctx, tx, in.WalletID)
 		if err != nil {
 			if errors.Is(err, postgres.ErrNotFound) {
@@ -169,7 +165,6 @@ func (p *WagerProcessor) processOnce(ctx context.Context, in ProcessWagerInput, 
 			return err
 		}
 
-		// 2. Persistent idempotency, evaluated while holding the lock.
 		existing, err := p.wagers.GetByIdempotencyKey(ctx, tx, in.IdempotencyKey)
 		switch {
 		case err == nil:
@@ -183,7 +178,6 @@ func (p *WagerProcessor) processOnce(ctx context.Context, in ProcessWagerInput, 
 			return err
 		}
 
-		// 3. The external id may not be reused under another idempotency key.
 		_, err = p.wagers.GetByProviderAndExternal(ctx, tx, in.ProviderID, in.ExternalTransactionID)
 		switch {
 		case err == nil:
@@ -193,18 +187,14 @@ func (p *WagerProcessor) processOnce(ctx context.Context, in ProcessWagerInput, 
 			return err
 		}
 
-		// 4. Apply the transaction.
 		applied, err := p.apply(ctx, tx, w, in, hash)
 		if err != nil {
 			return err
 		}
 		out = applied
 		return nil
-	})
-	if err != nil {
-		return ProcessWagerOutput{}, err
-	}
-	return out, nil
+	}()
+	return out, err
 }
 
 func replayOutput(t *wagering.WagerTransaction, hash string) (ProcessWagerOutput, error) {
@@ -245,7 +235,6 @@ func (p *WagerProcessor) apply(ctx context.Context, tx pgx.Tx, w *wallet.Wallet,
 		return ProcessWagerOutput{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 
-	// Decide in memory (wallet and transaction), then persist everything.
 	entry, err := p.decide(ctx, tx, w, t)
 	if err != nil {
 		return ProcessWagerOutput{}, err
@@ -284,8 +273,6 @@ func (p *WagerProcessor) apply(ctx context.Context, tx pgx.Tx, w *wallet.Wallet,
 	}, nil
 }
 
-// decide moves t to its final status and applies the balance change to w (in
-// memory). It returns the ledger entry when money moved, nil otherwise.
 func (p *WagerProcessor) decide(ctx context.Context, tx pgx.Tx, w *wallet.Wallet, t *wagering.WagerTransaction) (*ledger.Entry, error) {
 	if t.Amount.Currency() != w.Currency() {
 		return nil, rejectTx(w, t, FailureCurrencyMismatch)
@@ -307,8 +294,6 @@ func (p *WagerProcessor) decide(ctx context.Context, tx pgx.Tx, w *wallet.Wallet
 	return nil, fmt.Errorf("%w: unsupported kind %s", ErrInvalidInput, t.Kind)
 }
 
-// move debits or credits the wallet by the transaction amount. Insufficient
-// funds reject the transaction with insufficientCode and leave the wallet untouched.
 func (p *WagerProcessor) move(ctx context.Context, w *wallet.Wallet, t *wagering.WagerTransaction, dir ledger.Direction, insufficientCode string) (*ledger.Entry, error) {
 	before := w.Balance()
 
@@ -336,10 +321,6 @@ func (p *WagerProcessor) move(ctx context.Context, w *wallet.Wallet, t *wagering
 	return &entry, nil
 }
 
-// reverse handles REFUND and ROLLBACK. REFUND reverses a BET (credit);
-// ROLLBACK reverses a BET (credit) or a WIN (debit). The reference must be
-// PROCESSED, belong to the same wallet, match currency and amount, and may be
-// reversed only once. An unknown reference parks the transaction as PENDING_REFERENCE.
 func (p *WagerProcessor) reverse(ctx context.Context, tx pgx.Tx, w *wallet.Wallet, t *wagering.WagerTransaction) (*ledger.Entry, error) {
 	ref, err := p.wagers.GetByProviderAndExternal(ctx, tx, t.ProviderID, t.ReferenceExternalTransactionID)
 	if errors.Is(err, postgres.ErrNotFound) {
@@ -396,14 +377,11 @@ func reversible(kind, refKind wagering.Kind) bool {
 	return false
 }
 
-// rejectTx rejects t and records the current wallet balance as its result balance.
 func rejectTx(w *wallet.Wallet, t *wagering.WagerTransaction, code string) error {
 	if err := t.MarkRejected(code); err != nil {
 		return fmt.Errorf("usecase: reject transaction %s: %w", t.ID, err)
 	}
 	balance := w.Balance()
-	// O domínio exige que ResultBalance tenha a mesma moeda de Amount.
-	// Se houver divergência de moeda, salvamos zero na moeda da transação.
 	if t.Amount.Currency() != balance.Currency() {
 		balance = money.Zero(t.Amount.Currency())
 	}

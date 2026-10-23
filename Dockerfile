@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine AS build
+FROM golang:1.26-alpine AS build
 
 WORKDIR /src
 
@@ -8,12 +8,17 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/app
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM alpine:3.19
 
-COPY --from=build /out/app /app
+# Install CA certificates for HTTPS calls (e.g., Keycloak)
+RUN apk add --no-cache ca-certificates
+
+# Copy the compiled binary to the system's local bin folder
+COPY --from=build /out/app /usr/local/bin/app
 
 EXPOSE 8080
 
-USER nonroot:nonroot
+# Run as a non-root user for security
+USER nobody:nobody
 
-ENTRYPOINT ["/app"]
+ENTRYPOINT ["/usr/local/bin/app"]

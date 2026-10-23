@@ -72,7 +72,7 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
       "protocol": "openid-connect",
-      "defaultClientScopes": ["basic", "wager.write"],
+      "defaultClientScopes": ["basic", "wager.write", "internal.wallet"],
       "optionalClientScopes": [],
       "protocolMappers": [
         {
@@ -114,7 +114,7 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
       "protocol": "openid-connect",
-      "defaultClientScopes": ["basic", "wager.write"],
+      "defaultClientScopes": ["basic", "wager.write", "internal.wallet"],
       "optionalClientScopes": [],
       "protocolMappers": [
         {

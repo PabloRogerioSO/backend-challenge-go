@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -20,8 +21,7 @@ type errorBody struct {
 	Message string `json:"message"`
 }
 
-// RequireAuth valida o Bearer token e coloca provider_id e scopes no contexto.
-// Token ausente, inválido, expirado ou sem provider_id resulta em 401.
+// RequireAuth validates the Bearer token and adds provider_id and scopes to the context.
 func RequireAuth(v *Validator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +33,9 @@ func RequireAuth(v *Validator) func(http.Handler) http.Handler {
 
 			claims, err := v.Validate(r.Context(), raw)
 			if err != nil {
+				// Log the exact reason the token failed for debugging
+				slog.ErrorContext(r.Context(), "auth: token validation failed", slog.Any("error", err))
+
 				msg := "invalid token"
 				if errors.Is(err, ErrMissingProviderID) {
 					msg = "token is missing provider_id claim"
@@ -48,8 +51,7 @@ func RequireAuth(v *Validator) func(http.Handler) http.Handler {
 	}
 }
 
-// RequireScope exige que o token autenticado possua o scope informado.
-// Deve ser usado depois de RequireAuth; sem autenticação no contexto retorna 401.
+// RequireScope ensures the authenticated token possesses the required scope.
 func RequireScope(scope string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -69,13 +71,11 @@ func RequireScope(scope string) func(http.Handler) http.Handler {
 	}
 }
 
-// ProviderIDFromContext retorna o provider_id do token ou "" se ausente.
 func ProviderIDFromContext(ctx context.Context) string {
 	id, _ := ctx.Value(providerIDKey).(string)
 	return id
 }
 
-// ScopesFromContext retorna uma cópia dos scopes do token ou nil se ausentes.
 func ScopesFromContext(ctx context.Context) []string {
 	scopes, _ := ctx.Value(scopesKey).([]string)
 	if scopes == nil {

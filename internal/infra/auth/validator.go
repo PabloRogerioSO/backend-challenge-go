@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"strings"
@@ -28,14 +29,10 @@ const (
 )
 
 var (
-	// ErrInvalidToken indica token malformado, com assinatura inválida, expirado,
-	// com issuer/audience incorretos ou qualquer outra falha de validação.
-	ErrInvalidToken = errors.New("auth: invalid token")
-	// ErrMissingProviderID indica token válido porém sem a claim "provider_id".
+	ErrInvalidToken      = errors.New("auth: invalid token")
 	ErrMissingProviderID = errors.New("auth: missing provider_id claim")
 )
 
-// Claims são os dados extraídos de um token validado.
 type Claims struct {
 	Subject    string
 	ProviderID string
@@ -48,7 +45,6 @@ type tokenClaims struct {
 	Scope      string `json:"scope"`
 }
 
-// Validator valida JWTs emitidos pelo Keycloak usando o JWKS publicado.
 type Validator struct {
 	issuer   string
 	jwksURL  string
@@ -66,7 +62,7 @@ type Validator struct {
 	refreshMu sync.Mutex
 }
 
-// NewValidator cria o validador e já baixa o JWKS inicial.
+// NewValidator creates the validator and attempts to download the JWKS.
 func NewValidator(issuerURL, jwksURL, audience string) (*Validator, error) {
 	if strings.TrimSpace(issuerURL) == "" {
 		return nil, errors.New("auth: issuerURL is required")
@@ -91,12 +87,11 @@ func NewValidator(issuerURL, jwksURL, audience string) (*Validator, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), initialFetchTimeout)
 	defer cancel()
 	if err := v.refresh(ctx); err != nil {
-		return nil, fmt.Errorf("auth: initial JWKS fetch: %w", err)
+		slog.Warn("auth: initial JWKS fetch failed, will retry on demand", "error", err)
 	}
 	return v, nil
 }
 
-// Validate valida assinatura, exp, nbf, iss e aud e extrai provider_id e scope.
 func (v *Validator) Validate(ctx context.Context, rawToken string) (*Claims, error) {
 	parser := jwt.NewParser(
 		jwt.WithValidMethods([]string{allowedSigningMethod}),
@@ -141,7 +136,6 @@ func (v *Validator) key(ctx context.Context, kid string) (*rsa.PublicKey, error)
 
 	if err := v.refresh(ctx); err != nil {
 		if ok {
-			// Mantém a chave em cache se o Keycloak estiver temporariamente fora.
 			return k, nil
 		}
 		return nil, err
@@ -162,8 +156,12 @@ func (v *Validator) refresh(ctx context.Context) error {
 
 	v.mu.RLock()
 	last := v.lastAttempt
+	hasKeys := len(v.keys) > 0
 	v.mu.RUnlock()
-	if !last.IsZero() && time.Since(last) < v.minRefresh {
+
+	// Only throttle if we already have keys. If the initial fetch failed,
+	// we must allow immediate retries when a request arrives.
+	if hasKeys && !last.IsZero() && time.Since(last) < v.minRefresh {
 		return nil
 	}
 
@@ -173,6 +171,7 @@ func (v *Validator) refresh(ctx context.Context) error {
 
 	keys, err := v.fetchKeys(ctx)
 	if err != nil {
+		slog.Error("auth: failed to refresh JWKS", "error", err)
 		return err
 	}
 

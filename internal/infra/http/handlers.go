@@ -16,6 +16,7 @@ import (
 
 	"github.com/PabloRogerioSO/backend-challenge-go/internal/app/usecase"
 	"github.com/PabloRogerioSO/backend-challenge-go/internal/domain/wagering"
+	"github.com/PabloRogerioSO/backend-challenge-go/internal/infra/metrics"
 	"github.com/PabloRogerioSO/backend-challenge-go/internal/infra/postgres"
 )
 
@@ -123,6 +124,12 @@ func (h *handlers) reconcile(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
+
+	// Increment Prometheus metric if the wallet balance diverges from the ledger
+	if !report.Consistent {
+		metrics.ReconcileDivergencesTotal.Inc()
+	}
+
 	writeJSON(w, http.StatusOK, newReconciliationResponse(report))
 }
 

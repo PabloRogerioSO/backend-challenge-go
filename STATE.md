@@ -10,6 +10,7 @@
 | F5    | Authentication/Authorization (Keycloak)       | ✅     |
 | F6    | Use cases and idempotency                     | ✅     |
 | F7    | HTTP Handlers and Middlewares                 | ✅     |
-| F8    | SQS Consumer and Inbox                        | ❌     |
-| F9    | Outbox worker and Reference worker            | ❌     |
-| F10   | Final tests and documentation                 | ❌     |
+| F8    | SQS Consumer and Inbox                        | ✅     |
+| F9    | Outbox worker and Reference worker            | ✅     |
+| F10   | Final tests and documentation                 | ✅     |
+| F11   | Prometheus Metrics and Multi-instance E2E     | ✅     |
