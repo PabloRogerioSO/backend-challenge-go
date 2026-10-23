@@ -1,0 +1,1 @@
+ALTER TABLE outbox ALTER COLUMN created_at SET DEFAULT now();

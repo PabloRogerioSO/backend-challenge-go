@@ -21,38 +21,62 @@ CREATE TABLE wallets (
 -- wager_transactions
 -- =====================================================================
 CREATE TABLE wager_transactions (
-    id                       UUID         NOT NULL DEFAULT gen_random_uuid(),
-    wallet_id                UUID         NOT NULL,
-    provider_id              VARCHAR(64),
-    external_transaction_id  VARCHAR(128),
-    idempotency_key          VARCHAR(128),
-    request_hash             VARCHAR(64),
-    kind                     VARCHAR(16)  NOT NULL,
-    status                   VARCHAR(16)  NOT NULL,
-    amount_cents             BIGINT       NOT NULL,
-    currency                 VARCHAR(3)   NOT NULL,
-    reference_transaction_id UUID,
-    created_at               TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    updated_at               TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    id                                UUID         NOT NULL DEFAULT gen_random_uuid(),
+    wallet_id                         UUID         NOT NULL,
+    provider_id                       VARCHAR(64),
+    external_transaction_id           VARCHAR(128),
+    idempotency_key                   VARCHAR(128),
+    request_hash                      VARCHAR(64),
+    kind                              VARCHAR(16)  NOT NULL,
+    status                            VARCHAR(24)  NOT NULL,
+    amount_cents                      BIGINT       NOT NULL,
+    currency                          VARCHAR(3)   NOT NULL,
+    round_id                          VARCHAR(128),
+    game_id                           VARCHAR(128),
+    reference_external_transaction_id VARCHAR(128),
+    resolved_reference_transaction_id UUID,
+    failure_code                      VARCHAR(64),
+    result_balance_cents              BIGINT,
+    created_at                        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at                        TIMESTAMPTZ  NOT NULL DEFAULT now(),
     CONSTRAINT pk_wager_transactions PRIMARY KEY (id),
     CONSTRAINT fk_wager_transactions_wallet
         FOREIGN KEY (wallet_id) REFERENCES wallets (id),
-    CONSTRAINT fk_wager_transactions_reference
-        FOREIGN KEY (reference_transaction_id) REFERENCES wager_transactions (id),
+    CONSTRAINT fk_wager_transactions_resolved_reference
+        FOREIGN KEY (resolved_reference_transaction_id) REFERENCES wager_transactions (id),
     CONSTRAINT ck_wager_transactions_kind
-        CHECK (kind IN ('BET', 'WIN', 'LOSS', 'REVERSAL')),
+        CHECK (kind IN ('OPENING', 'BET', 'WIN', 'LOSS', 'REFUND', 'ROLLBACK')),
     CONSTRAINT ck_wager_transactions_status
-        CHECK (status IN ('PENDING', 'COMPLETED', 'FAILED', 'REVERSED')),
-    CONSTRAINT ck_wager_transactions_amount_non_negative
-        CHECK (amount_cents >= 0),
-    CONSTRAINT ck_wager_transactions_loss_zero
-        CHECK (kind <> 'LOSS' OR amount_cents = 0),
+        CHECK (status IN ('PENDING', 'PENDING_REFERENCE', 'PROCESSED', 'REJECTED', 'FAILED')),
     CONSTRAINT ck_wager_transactions_currency_iso4217
         CHECK (currency ~ '^[A-Z]{3}$'),
-    CONSTRAINT ck_wager_transactions_provider_external_pair
-        CHECK ((provider_id IS NULL) = (external_transaction_id IS NULL)),
-    CONSTRAINT ck_wager_transactions_reversal_reference
-        CHECK (kind <> 'REVERSAL' OR reference_transaction_id IS NOT NULL)
+    CONSTRAINT ck_wager_transactions_result_balance_non_negative
+        CHECK (result_balance_cents IS NULL OR result_balance_cents >= 0),
+    CONSTRAINT ck_wager_transactions_amount_by_kind
+        CHECK (
+            (kind = 'LOSS' AND amount_cents = 0)
+            OR
+            (kind <> 'LOSS' AND amount_cents > 0)
+        ),
+    CONSTRAINT ck_wager_transactions_opening_identity
+        CHECK (
+            (kind = 'OPENING'
+                AND provider_id IS NULL
+                AND external_transaction_id IS NULL
+                AND idempotency_key IS NULL
+                AND request_hash IS NULL)
+            OR
+            (kind <> 'OPENING'
+                AND provider_id IS NOT NULL
+                AND external_transaction_id IS NOT NULL
+                AND idempotency_key IS NOT NULL
+                AND request_hash IS NOT NULL)
+        ),
+    CONSTRAINT ck_wager_transactions_reference_required
+        CHECK (
+            kind NOT IN ('REFUND', 'ROLLBACK')
+            OR reference_external_transaction_id IS NOT NULL
+        )
 );
 
 CREATE UNIQUE INDEX uq_wager_transactions_provider_external
@@ -63,16 +87,12 @@ CREATE UNIQUE INDEX uq_wager_transactions_idempotency_key
     ON wager_transactions (idempotency_key)
     WHERE idempotency_key IS NOT NULL;
 
-CREATE UNIQUE INDEX uq_wager_transactions_single_reversal
-    ON wager_transactions (reference_transaction_id)
-    WHERE kind = 'REVERSAL';
-
 CREATE INDEX idx_wager_transactions_wallet_created
     ON wager_transactions (wallet_id, created_at DESC);
 
-CREATE INDEX idx_wager_transactions_reference
-    ON wager_transactions (reference_transaction_id)
-    WHERE reference_transaction_id IS NOT NULL;
+CREATE INDEX idx_wager_transactions_resolved_reference
+    ON wager_transactions (resolved_reference_transaction_id)
+    WHERE resolved_reference_transaction_id IS NOT NULL;
 
 -- =====================================================================
 -- wallet_ledger_entries (append-only)
