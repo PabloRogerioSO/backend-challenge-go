@@ -1,13 +1,15 @@
-# Estado do projeto
+# Project State
 
-| Fase | Descrição                                   | Status |
-|------|---------------------------------------------|--------|
-| F0   | Definição do desafio e decisões fixas       | ✅     |
-| F1   | Skeleton do projeto e ambiente              | ❌     |
-| F2   | Migrations e schema (ledger, outbox, idemp.)| ❌     |
-| F3   | Domínio: dinheiro e wallet                  | ❌     |
-| F4   | Autenticação/Autorização (Keycloak)         | ❌     |
-| F5   | Transações e idempotência                   | ❌     |
-| F6   | Reversões                                   | ❌     |
-| F7   | Outbox e publicação SQS                     | ❌     |
-| F8   | Testes e documentação final                 | ❌     |
+| Phase | Description                                   | Status |
+|-------|-----------------------------------------------|--------|
+| F0    | Challenge definition and fixed decisions      | ✅     |
+| F1    | Project skeleton and environment              | ✅     |
+| F2    | Migrations and schema (ledger, outbox, idemp.)| ✅     |
+| F3    | Domain: money and entities                    | ✅     |
+| F4    | PostgreSQL repositories (pgx)                 | ✅     |
+| F5    | Authentication/Authorization (Keycloak)       | ✅     |
+| F6    | Use cases and idempotency                     | ✅     |
+| F7    | HTTP Handlers and Middlewares                 | ✅     |
+| F8    | SQS Consumer and Inbox                        | ❌     |
+| F9    | Outbox worker and Reference worker            | ❌     |
+| F10   | Final tests and documentation                 | ❌     |
